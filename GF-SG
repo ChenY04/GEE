@@ -1,0 +1,8 @@
+1.the newest GEE JavaScript code for Gap Filling and Savitzky–Golay filtering method (GF-SG) is avaliable on 
+""
+2.GF_SG is used for reconstructing high-quality Landsat NDVI time series data of 8-day intervals.
+3.Developed by Yang Chen, Email: yangchen.940407@gmail.com or yangchen0407@mail.bnu.edu.cn
+//Update history:
+//              06/2021, add cloud shadows as the invalid value in MODIS data 
+4.please cite: Chen, Y., Cao R.Y., Chen, J., Liu, L.C., and Matsushita, B. A practical approach to reconstruct high-quality Landsat NDVI time-series data by gap
+filling and the Savitzky–Golay filter. ISPRS Journal of Photogrammetry and Remote Sensing.
