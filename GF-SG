@@ -1,5 +1,5 @@
 1.the newest GEE JavaScript code for Gap Filling and Savitzky–Golay filtering method (GF-SG) is avaliable on 
-""
+"https://code.earthengine.google.com/564c86ac6cf7538d3e8ba05cdc3324c9?noload=true"
 2.GF_SG is used for reconstructing high-quality Landsat NDVI time series data of 8-day intervals.
 3.Developed by Yang Chen, Email: yangchen.940407@gmail.com or yangchen0407@mail.bnu.edu.cn
 //Update history:
