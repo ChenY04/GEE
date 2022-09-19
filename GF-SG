@@ -13,3 +13,5 @@
 //              12/2021, add the applyScaleFactors function when using USGS Landsat 5/7/8 Level 2, Collection 2 (ref: the guide of these datesets in Earth Engine Data Catalog)
 6.please cite: Chen, Y., Cao R.Y., Chen, J., Liu, L.C., and Matsushita, B. A practical approach to reconstruct high-quality Landsat NDVI time-series data by gap
 filling and the Savitzky–Golay filter. ISPRS Journal of Photogrammetry and Remote Sensing.
+7.the applications/related studies of GF-SG as a supplementary reference:
+(1) Reconstructing High-Spatiotemporal-Resolution (30 m and 8-Days) NDVI Time-Series Data for the Qinghai–Tibetan Plateau from 2000–2020 (https://doi.org/10.3390/rs14153648)
