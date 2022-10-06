@@ -1,5 +1,5 @@
 1.the newest GEE JavaScript code for Gap Filling and Savitzky–Golay filtering method (GF-SG) is avaliable on 
-"https://code.earthengine.google.com/1f0df5adcb366762c8a3948302067fa0?noload=true"
+"https://code.earthengine.google.com/707d058df70e28ff4f5987d357ff9311?noload=true"
 2.the code of Interpolation_v1 is available on: https://code.earthengine.google.com/7eb9f43fd3da7fdfda5bfe432a5316e7?noload=true
 3.the code of SG_filter_v1 is available on: https://code.earthengine.google.com/cd51fb7f81a80690632911294ab90aa3?noload=true
 4.GF_SG is used for reconstructing high-quality Landsat NDVI time series data of 8-day intervals.
@@ -11,6 +11,7 @@
 //                       2.Users can choose to save a sub area or a period of time series from output data 
 //              10/2021, updation of generating Landsat 5/7 cloud flag with the new source of Landsat 5/7 surface reflectance on gee 
 //              12/2021, add the applyScaleFactors function when using USGS Landsat 5/7/8 Level 2, Collection 2 (ref: the guide of these datesets in Earth Engine Data Catalog)
+//              09/2022, correct some code commenting errors
 6.please cite: Chen, Y., Cao R.Y., Chen, J., Liu, L.C., and Matsushita, B. A practical approach to reconstruct high-quality Landsat NDVI time-series data by gap
 filling and the Savitzky–Golay filter. ISPRS Journal of Photogrammetry and Remote Sensing.
 7.the applications/related studies of GF-SG as a supplementary reference:
