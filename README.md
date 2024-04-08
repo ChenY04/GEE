@@ -2,14 +2,14 @@
 The latest news about my work on GEE
 
 Update history
-06/2021, add cloud shadows as the invalid value in MODIS data 
-08/2021, 1.update the band name of Landsat 8 SR (B4 -> SR_B4;B5 -> SR_B5;pixel_qa -> QA_PIXEL)
+<06/2021, add cloud shadows as the invalid value in MODIS data.
+<08/2021, 1.update the band name of Landsat 8 SR (B4 -> SR_B4;B5 -> SR_B5;pixel_qa -> QA_PIXEL)
          and geneneration of Landsat 8 cloud mask
          2.Users can choose to save a sub area or a period of time series from output data (L348,L366)
-10/2021, updation of generating Landsat 5/7 cloud flag with the new source of Landsat 5/7 surface reflectance on gee 
-12/2021, add the applyScaleFactors function when using USGS Landsat 5/7/8 Level 2, Collection 2 (ref: the guide of these datesets in Earth Engine Data Catalog)
-09/2022, correct some code commenting errors
-04/2024, The GF-SG V3 version (easy-implemented) has been released: https://code.earthengine.google.com/aa5a7e3d27e9d71889cd5f25e0f6479c?noload=true
+<10/2021, updation of generating Landsat 5/7 cloud flag with the new source of Landsat 5/7 surface reflectance on gee 
+<12/2021, add the applyScaleFactors function when using USGS Landsat 5/7/8 Level 2, Collection 2 (ref: the guide of these datesets in Earth Engine Data Catalog)
+<09/2022, correct some code commenting errors
+<04/2024, The GF-SG V3 version (easy-implemented) has been released: https://code.earthengine.google.com/aa5a7e3d27e9d71889cd5f25e0f6479c?noload=true
 the original GF-SG V1 version can still be referenced via the link: https://code.earthengine.google.com/ffae6b05282fb6e9a83ecbb5019b4958?noload=true
   !!!!!!!!Features of the new version:
   1. Unlike the V1 version, which suggests calculating each Landsat tile separately before stitching them together for large area results, the new version supports direct calculation within any large-scale region (as defined by the range of the uploaded shp file) to obtain extensive regional time series data.
