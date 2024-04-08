@@ -1,6 +1,7 @@
 # GEE
 The latest news about my work on GEE
-/*****Update history*****/
+
+Update history
 06/2021, add cloud shadows as the invalid value in MODIS data 
 08/2021, 1.update the band name of Landsat 8 SR (B4 -> SR_B4;B5 -> SR_B5;pixel_qa -> QA_PIXEL)
          and geneneration of Landsat 8 cloud mask
