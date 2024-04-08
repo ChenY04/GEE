@@ -1,18 +1,37 @@
-1.the newest GEE JavaScript code for Gap Filling and Savitzky–Golay filtering method (GF-SG) is avaliable on 
-"https://code.earthengine.google.com/707d058df70e28ff4f5987d357ff9311?noload=true"
-2.the code of Interpolation_v1 is available on: https://code.earthengine.google.com/7eb9f43fd3da7fdfda5bfe432a5316e7?noload=true
-3.the code of SG_filter_v1 is available on: https://code.earthengine.google.com/cd51fb7f81a80690632911294ab90aa3?noload=true
-4.GF_SG is used for reconstructing high-quality Landsat NDVI time series data of 8-day intervals.
-5.Developed by Yang Chen, Email: yangchen.940407@gmail.com or yangchen0407@mail.bnu.edu.cn
-//Update history:
-//              06/2021, add cloud shadows as the invalid value in MODIS data 
-//              08/2021, 1.update the band name of Landsat 8 SR (B4 -> SR_B4;B5 -> SR_B5;pixel_qa -> QA_PIXEL)
-//                       and geneneration of Landsat 8 cloud mask
-//                       2.Users can choose to save a sub area or a period of time series from output data 
-//              10/2021, updation of generating Landsat 5/7 cloud flag with the new source of Landsat 5/7 surface reflectance on gee 
-//              12/2021, add the applyScaleFactors function when using USGS Landsat 5/7/8 Level 2, Collection 2 (ref: the guide of these datesets in Earth Engine Data Catalog)
-//              09/2022, correct some code commenting errors
-6.please cite: Chen, Y., Cao R.Y., Chen, J., Liu, L.C., and Matsushita, B. A practical approach to reconstruct high-quality Landsat NDVI time-series data by gap
-filling and the Savitzky–Golay filter. ISPRS Journal of Photogrammetry and Remote Sensing.
-7.the applications/related studies of GF-SG as a supplementary reference:
-(1) Reconstructing High-Spatiotemporal-Resolution (30 m and 8-Days) NDVI Time-Series Data for the Qinghai–Tibetan Plateau from 2000–2020 (https://doi.org/10.3390/rs14153648)
+/**************Information Description*****************/
+//the GEE JavaScript code for Gap Filling and Savitzky–Golay filtering method (GF-SG) 
+//GF_SG is used for reconstructing high-quality Landsat-like VI time series data of 8-day intervals.
+//GF-SG first fills missing values in the original Landsat NDVI time-series data by integrating the MODIS NDVI time-series data and cloud-free Landsat observations.
+//A temporal filter is used to remove the residual noise in the synthesized time series.
+//GF-SG and filter parameters were initially designed for reconstructing NDVI time series. other vegetation indexes (VIs) and optimal parameters are also applicable after considering their respective characteristics.
+//      the discussion of SG parameters can be found in the following paper:
+//      Chen, J., Jönsson, P., et al.(2004).A simple method for reconstructing a high-quality NDVI time-series data set based on the Savitzky-Golay filter. Remote Sensing of Environment
+//      Cao, R.Y., Chen, Y., et al.(2018).A simple method to improve the quality of NDVI time-series data by integrating spatiotemporal information with the Savitzky-Golay filter. Remote Sensing of Environment  
+//Developed by Yang Chen, Email: yangchen.940407@gmail.com / yangchen0407@mail.bnu.edu.cn
+//The latest version and information of GF-SG can be found at 
+//            "https://github.com/ChenY04/GEE.git"
+//please cite: Chen, Y., Cao R.Y., Chen, J., Liu, L.C., and Matsushita, B. A practical approach to reconstruct high-quality Landsat NDVI time-series data by gap
+//filling and the Savitzky–Golay filter. ISPRS Journal of Photogrammetry and Remote Sensing.
+
+/*****Update history*****/
+//06/2021, add cloud shadows as the invalid value in MODIS data 
+//08/2021, 1.update the band name of Landsat 8 SR (B4 -> SR_B4;B5 -> SR_B5;pixel_qa -> QA_PIXEL)
+//         and geneneration of Landsat 8 cloud mask
+//         2.Users can choose to save a sub area or a period of time series from output data (L348,L366)
+//10/2021, updation of generating Landsat 5/7 cloud flag with the new source of Landsat 5/7 surface reflectance on gee 
+//12/2021, add the applyScaleFactors function when using USGS Landsat 5/7/8 Level 2, Collection 2 (ref: the guide of these datesets in Earth Engine Data Catalog)
+//09/2022, correct some code commenting errors
+//04/2024, The GF-SG V3 version (easy-implemented) has been released:  https://code.earthengine.google.com/aa5a7e3d27e9d71889cd5f25e0f6479c?noload=true
+           the original GF-SG V1 version can still be referenced via the link: https://code.earthengine.google.com/ffae6b05282fb6e9a83ecbb5019b4958?noload=true
+//  !!!!!!!!Features of the new version:
+//  1. Unlike the V1 version, which suggests calculating each Landsat tile separately before stitching them together for large area results, the new version supports direct calculation within any large-scale region (as defined by the range of the uploaded shp file) to obtain extensive regional time series data.
+//  2. The new version has significantly improved user memory usage and reduced computation time (for example, calculating the NDVI time series data for an area of 11,900 km2 (with an 8-day interval, 46 images) from over 5 hours previously to currently around 40 minutes).
+//  3. The new version supports the use of Landsat 5/7/8 data simultaneously for calculations.
+//  4. The new version provides SG filtering and Whittaker filtering as options for users to choose based on their needs.
+//  5. The new version offers other vegetation index calculations (EVI2, LSWI, NMDI) for reference.
+//  6. A simplified linear interpolation and SG filtering program have been provided to improve computational efficiency.
+//  7. The new version simplifies the MODIS shape matching process, using unsupervised clustering cross-comparison instead of the neighborhood search matching process.
+//  8. The new version has updated dataset usage links, improved some programming errors, reduced program redundancy, and improved some program syntax for easier reading and use.
+//  9. Interpolation_v2: https://code.earthengine.google.com/d4760c7869e1d9044ea7d8f5dc3ab138?noload=true
+//     SG_filter_v2: https://code.earthengine.google.com/09260eb2e819bac048e958c0c8b8d40f?noload=true
+//     Whittaker_filter_v1: https://code.earthengine.google.com/e588bdf9ecc4ea140319a762455f7f30?noload=true
