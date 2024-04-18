@@ -21,7 +21,7 @@
 //10/2021, updation of generating Landsat 5/7 cloud flag with the new source of Landsat 5/7 surface reflectance on gee 
 //12/2021, add the applyScaleFactors function when using USGS Landsat 5/7/8 Level 2, Collection 2 (ref: the guide of these datesets in Earth Engine Data Catalog)
 //09/2022, correct some code commenting errors
-//04/2024, The GF-SG V3 version (easy-implemented) has been released:    https://code.earthengine.google.com/aa5a7e3d27e9d71889cd5f25e0f6479c?noload=true
+//04/2024, The GF-SG V3 version (easy-implemented) has been released
            the original GF-SG V1 version can still be referenced via the link: https://code.earthengine.google.com/ffae6b05282fb6e9a83ecbb5019b4958?noload=true
 //  !!!!!!!!Features of the new version:
 //  1. Unlike the V1 version, which suggests calculating each Landsat tile separately before stitching them together for large area results, the new version supports direct calculation within any large-scale region (as defined by the range of the uploaded shp file) to obtain extensive regional time series data.
