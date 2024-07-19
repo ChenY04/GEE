@@ -21,6 +21,8 @@
 //10/2021, updation of generating Landsat 5/7 cloud flag with the new source of Landsat 5/7 surface reflectance on gee 
 //12/2021, add the applyScaleFactors function when using USGS Landsat 5/7/8 Level 2, Collection 2 (ref: the guide of these datesets in Earth Engine Data Catalog)
 //09/2022, correct some code commenting errors
+//2022, the code of Interpolation_v1 is available on: https://code.earthengine.google.com/7eb9f43fd3da7fdfda5bfe432a5316e7?noload=true
+//      the code of SG_v1 is available on: https://code.earthengine.google.com/a8e4f2e1026c465efeeea5a81b411a09?noload=true
 //04/2024, The GF-SG V3 version (easy-implemented) has been released   https://code.earthengine.google.com/a4ddd6bf0a33380e1332ac6e123bdea9?noload=true
            the original GF-SG V1 version can still be referenced via the link: https://code.earthengine.google.com/ffae6b05282fb6e9a83ecbb5019b4958?noload=true
 //  !!!!!!!!Features of the new version:
