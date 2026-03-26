@@ -1,1 +1,1730 @@
+(*****AuxiliaryExtract*****)
+/* * * * Auxiliary Information Extraction for single year 
+* * * */
+
+// * * data preprocessing * * //
+exports.auxiliary_extract = function (checkboxDict,samples,target_year){
+  
+  var StudyRegion = ee.Geometry.Polygon([[-179.99,-89.99],[179.99,-89.99],[179.99,89.99],[-179.99,89.99]])
+  target_year = ee.Number.parse(target_year)
+  var start_date = ee.Date.fromYMD(target_year, 1, 1);
+  var end_date = start_date.advance(1, 'year');
+  var L89_bands = ['SR_B2', 'SR_B3', 'SR_B4','SR_B5','SR_B6','SR_B7', 'QA_PIXEL'];
+  var L8_bands = ['B2','B3','B4','B5','B6','B7','pixel_qa'];
+  var L57_bands = ['SR_B1', 'SR_B2', 'SR_B3','SR_B4','SR_B5','SR_B7', 'QA_PIXEL'];
+  var new_bands = ['BLUE','GREEN','RED','NIR','SWIR1','SWIR2','pixel_qa']
+  var LTCol = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2').select(L89_bands)
+                   .merge(ee.ImageCollection('LANDSAT/LC09/C02/T1_L2').select(L89_bands))
+                   .merge(ee.ImageCollection('LANDSAT/LE07/C02/T1_L2').select(L57_bands,L89_bands))
+                   .merge(ee.ImageCollection('LANDSAT/LT05/C02/T1_L2').select(L57_bands,L89_bands))
+                   .filter(ee.Filter.date(start_date, end_date)).map(applyScaleFactors)
+                   .select(L89_bands,L8_bands).map(Landsat_CloudShadowMask)
+                   .filterMetadata('CLOUD_COVER','less_than',50)
+                   .select(L8_bands,new_bands)
+  var LT_VIs = LTCol.map(Landsat_VIs).reduce(ee.Reducer.percentile([100])).select([
+    'BLUE_p100','GREEN_p100','RED_p100','NIR_p100','SWIR1_p100','SWIR2_p100','NDVI_p100','NDWI_p100','NDBI_p100'],
+    ['BLUE','GREEN','RED','NIR','SWIR1','SWIR2','NDVI','NDWI','NDBI']).set('year',target_year)
+  
+  // * * VIs * * //
+  var VIs = LT_VIs.select(['NDVI','NDWI','NDBI'])
+  // * * FVC * * //
+  var NDVI = LT_VIs.select('NDVI')
+  var FVC = ee.Image(calFVC(NDVI,StudyRegion,30))
+  // * * DEM * * //
+  var dem_dataset = ee.ImageCollection('JAXA/ALOS/AW3D30/V3_2');
+  var elevation = dem_dataset.select('DSM').mosaic().rename('elevation');
+  var proj = dem_dataset.first().select(0).projection();
+  var slope = ee.Terrain.slope(elevation.setDefaultProjection(proj)).rename('slope')
+  
+  // 【修改点】：添加土壤类型数据提取逻辑
+  // * * Soil Texture * * //
+  var soil_dataset = ee.Image("ISDASOIL/Africa/v1/texture_class");
+  var soil_texture = soil_dataset.select('texture_0_20').rename('Soil_Texture');
+  
+  // 【修改点】：添加物候期数据提取，并转换为DOY
+  // * * Phenology (MODIS MCD12Q2) * * //
+ // * * Phenology (MODIS MCD12Q2) * * //
+  var pheno_col = ee.ImageCollection("MODIS/061/MCD12Q2");
+  
+  // 动态获取数据集可用的最早和最晚年份
+  var first_img = ee.Image(pheno_col.sort('system:time_start').first());
+  var last_img = ee.Image(pheno_col.sort('system:time_start', false).first());
+  var min_year = ee.Number(ee.Date(first_img.get('system:time_start')).get('year'));
+  var max_year = ee.Number(ee.Date(last_img.get('system:time_start')).get('year'));
+  
+  // 将 target_year 限制在可用范围内。如果超出，会自动 fallback 到最近的边界年份
+  var safe_year = target_year.max(min_year).min(max_year);
+  
+  var pheno_img = pheno_col
+      .filter(ee.Filter.calendarRange(safe_year, safe_year, 'year'))
+      .mosaic();
+      
+  // 计算实际采用年份（safe_year）1月1日距离 1970-01-01 的天数偏移量
+  // 必须使用 safe_year，否则使用替代年份数据减去原 target_year 的1月1日会导致 DOY 为负数
+  var start_day = ee.Number(ee.Date.fromYMD(safe_year, 1, 1).millis()).divide(86400000);
+  
+  var greenup_1 = pheno_img.select('Greenup_1').subtract(start_day).rename('Greenup_1');
+  var greenup_2 = pheno_img.select('Greenup_2').subtract(start_day).rename('Greenup_2');
+  var peak_1 = pheno_img.select('Peak_1').subtract(start_day).rename('Peak_1');
+  var peak_2 = pheno_img.select('Peak_2').subtract(start_day).rename('Peak_2');
+  
+  if (checkboxDict['NDVI'].getValue()){
+    samples = addinitialsams(samples,VIs.select('NDVI'),'NDVI')
+  }
+  if (checkboxDict['NDWI'].getValue()){
+    samples = addinitialsams(samples,VIs.select('NDWI'),'NDWI')
+  }
+  if (checkboxDict['NDBI'].getValue()){
+    samples = addinitialsams(samples,VIs.select('NDBI'),'NDBI')
+  }
+  if (checkboxDict['FVC'].getValue()){
+    samples = addinitialsams(samples,FVC,'FVC')
+  }
+  if (checkboxDict['Elevation'].getValue()){
+    samples = addinitialsams(samples,elevation,'elevation')
+  }
+  if (checkboxDict['Slope'].getValue()){
+    samples = addinitialsams(samples,slope,'slope')
+  }
+  
+  // 【修改点】：追加新加参数的添加逻辑
+  if (checkboxDict['Soil_Texture'] && checkboxDict['Soil_Texture'].getValue()){
+    samples = addinitialsams(samples, soil_texture, 'Soil_Texture')
+  }
+  if (checkboxDict['Greenup_1'] && checkboxDict['Greenup_1'].getValue()){
+    samples = addinitialsams(samples, greenup_1, 'Greenup_1')
+  }
+  if (checkboxDict['Greenup_2'] && checkboxDict['Greenup_2'].getValue()){
+    samples = addinitialsams(samples, greenup_2, 'Greenup_2')
+  }
+  if (checkboxDict['Peak_1'] && checkboxDict['Peak_1'].getValue()){
+    samples = addinitialsams(samples, peak_1, 'Peak_1')
+  }
+  if (checkboxDict['Peak_2'] && checkboxDict['Peak_2'].getValue()){
+    samples = addinitialsams(samples, peak_2, 'Peak_2')
+  }
+  
+  var samscol_final = ee.FeatureCollection(samples)
+  return samscol_final
+}
+
+//* * * * * * * * * * FUNCTION CONSTRUCTION  * * * * * * * * * //
+function applyScaleFactors(image) {// Applies scaling factors LC5-9.
+  var opticalBands = (image.select('SR_B.').multiply(0.0000275).add(-0.2)).multiply(10000)
+  return image.addBands(opticalBands, null, true)
+}
+
+var Landsat_CloudShadowMask = function(image) {
+  // Collection 2 的 QA_PIXEL 掩膜规则
+  var dilatedCloud = 1 << 1;
+  var cloud = 1 << 3;
+  var cloudShadow = 1 << 4;
+  var snow = 1 << 5;
+  
+  var qa = image.select('pixel_qa');
+  var mask = qa.bitwiseAnd(dilatedCloud).eq(0)
+    .and(qa.bitwiseAnd(cloud).eq(0))
+    .and(qa.bitwiseAnd(cloudShadow).eq(0))
+    .and(qa.bitwiseAnd(snow).eq(0));
+              
+  // 【关键修复】只选择光学波段(B2-B7)进行 min/max 过滤，避开 pixel_qa
+  var opticalBands = image.select(['B2', 'B3', 'B4', 'B5', 'B6', 'B7']);
+  var mask2 = opticalBands.reduce(ee.Reducer.min()).gt(0)
+                .and(opticalBands.reduce(ee.Reducer.max()).lt(10000));
+                
+  var mask3 = image.select('B2').subtract(image.select('B4').multiply(0.5)).lte(1200);
+  
+  return image.updateMask(mask).updateMask(mask2).updateMask(mask3);
+}
+
+var Landsat_VIs = function(image)    // * * Clalculate VIs * * //
+{
+  var NDVI = image.normalizedDifference(['NIR', 'RED']).rename('NDVI');
+  var NDWI = image.normalizedDifference(['GREEN', 'NIR']).rename('NDWI');
+  var NDBI = image.normalizedDifference(['SWIR1', 'NIR']).rename('NDBI')
+  image = image.addBands(NDVI).addBands(NDWI).addBands(NDBI)
+  return image;
+}
+
+// * * Combine two FeatureCollections by joining attributes
+function matchingFeatureCol(ini_col,match_col,prop_name){
+  var id_list = match_col.reduceColumns({
+    reducer: ee.Reducer.toList(),
+    selectors: ['id']
+  }).get('list');
+  id_list = ee.List(id_list)
+  var propValue_list = match_col.reduceColumns({
+    reducer: ee.Reducer.toList(),
+    selectors: [prop_name]
+  }).get('list');
+  propValue_list = ee.List(propValue_list)
+  var match_dictNew = ee.Dictionary.fromLists(ee.List(id_list), ee.List(propValue_list));
+  var final_col = ini_col.map(function(feature1) {
+    feature1 = ee.Feature(feature1)
+    var feature1_id = feature1.id();
+    var prop_value = ee.Number.parse(propValue_list.get(id_list.indexOf(feature1_id)));
+    var add_feature1 = ee.Algorithms.If(
+      ee.Algorithms.IsEqual(prop_value, null),
+      feature1.set(prop_name, 9999),  // If no match is found, set cluster to 9999
+      feature1.set(prop_name, prop_value)  // If a match is found, set the cluster
+    );
+    
+    return add_feature1;
+  });
+  return final_col
+}
+// * * Change ID of FeatureCollection
+function Change_ID(featureCol){
+  var new_featureCol = featureCol.map(function(feature) {
+    feature = ee.Feature(feature)
+    var featureid = ee.String(feature.id()).split('_').get(0)
+    return feature.set('id', featureid);
+  });
+  return new_featureCol
+}
+
+function addinitialsams(samples,image,prop_name){
+  var sample_info = image.sampleRegions({
+    collection: samples,
+    projection: 'EPSG:4326',
+    tileScale: 12,
+    geometries: true,
+    scale: 30
+  })
+  var sample_infoNew = Change_ID(sample_info)
+  // Combine two FeatureCollections by joining attributes
+  var new_samples = matchingFeatureCol(samples,sample_infoNew,prop_name)
+  return new_samples
+}
+
+function calFVC(NDVI,region,scale){
+  var num = NDVI.reduceRegion({
+    reducer:ee.Reducer.percentile([0,100]),
+    geometry:region,
+    scale:scale,
+    maxPixels:1e13
+  });
+  var min = ee.Number(num.get("NDVI_p0"));
+  var max = ee.Number(num.get("NDVI_p100"));
+  var isMinNull = ee.Algorithms.IsEqual(min, null); 
+  var FVC = ee.Algorithms.If(isMinNull, ee.Image(0), fvc_formula(NDVI,region,scale));
+  return ee.Image(FVC).rename('FVC')
+}
+
+function fvc_formula(NDVI,region,scale){
+  var num = NDVI.reduceRegion({
+    reducer:ee.Reducer.percentile([0,100]),
+    geometry:region,
+    scale:scale,
+    maxPixels:1e13
+  });
+  var min = ee.Number(num.get("NDVI_p0"));
+  var max = ee.Number(num.get("NDVI_p100"));
+  var min_Image = ee.Image(min)
+  var max_Image = ee.Image(max)
+  var FVC = (NDVI.subtract(min_Image)).divide(max_Image.subtract(min_Image))
+  var FVC_Normalization = FVC.min(ee.Image(1)).max(ee.Image(0))
+  return FVC_Normalization
+}
+
+(*****vi_sg*****)
+/*  used for the SSD_VCT tool  */
+
+//Get the NDVI time series from the clicked point region
+exports. ndvi_sg = function(y,point){
+  //The following is the realization of Savitzky-Golay soomthing method
+  var window_size = 7
+  var half_window =(window_size - 1)/2
+  var deriv = 0
+  
+  var order = 2
+  var order_range = ee.List.sequence(0,order)
+  var k_range = ee.List.sequence(-half_window, half_window)
+  //print(order_range)
+  var b = ee.Array(k_range.map(function (k) { return order_range
+            .map(function(o) { return ee.Number(k).pow(o)})}))
+  
+  var mPI = ee.Array(b.matrixPseudoInverse())
+  
+  var impulse_response = (mPI.slice({axis: 0, start: deriv, end: deriv+1})).project([1])
+  
+  var y_zero = y.get(0)
+  var firstvals = y.slice(1, half_window+1).reverse().map(
+    function(e) { return ee.Number(e).subtract(y_zero).abs().multiply(-1).add(y_zero) }
+  )
+  
+  var yend = y.get(-1)
+  var lastvals = y.slice(-half_window-1,-1).reverse().map(
+   function(e) { return ee.Number(e).subtract(yend).abs().add(yend) }
+  )
+  
+  var y_ext = firstvals.cat(y).cat(lastvals)
+  
+  var runLength = ee.List.sequence(0, y_ext.length().subtract(window_size))
+  
+  var smooth = runLength.map(function(i) {
+    return ee.Array(y_ext.slice(ee.Number(i), ee.Number(i).add(window_size))).multiply(impulse_response).reduce("sum", [0]).get([0])
+  })
+  return smooth
+}
+
+(*****vi_spectrum*****)
+/* used for the SSD_VCT tool  */
+var sg_indice = require('users/yourset/Algorithms:vi_sg');
+
+/** 提取 Sentinel-2 每个时间窗口内的最大指数合成值 (支持跨年份合成) */
+function s2list_indice(select_s2, year_num, index, slidewindow, point, str_indice, step){
+  index = ee.Number(index);
+  step = ee.Number(step);
+  var start = ee.Number(index.multiply(slidewindow));
+  var end = ee.Number(index.add(1).multiply(slidewindow));
+  
+  // 生成前后邻近年份的偏移列表，例如 step=1 时生成 [-1, 0, 1]
+  var stepList = ee.List.sequence(step.multiply(-1), step);
+  
+  // 核心逻辑：遍历偏移年份，分别提取相同滑动窗口(DOY)的数据并合并
+  var multiYearCol = ee.ImageCollection(
+    stepList.iterate(function(offset, prevCol) {
+      var currentYear = ee.Number(year_num).add(offset);
+      var baseDate = ee.Date.fromYMD(currentYear, 1, 1);
+      var start_date = baseDate.advance(start, 'day');
+      var end_date = baseDate.advance(end, 'day');
+      var currentYearCol = select_s2.filterDate(start_date, end_date);
+      return ee.ImageCollection(prevCol).merge(currentYearCol);
+    }, ee.ImageCollection([]))
+  );
+  
+  // 计算指定的四个指数
+  var select_s2_final = multiYearCol.map(function(img){
+    var img_nir = img.select('B8');
+    var img_red = img.select('B4');
+    var img_green = img.select('B3');
+    var img_re1 = img.select('B5');
+    var img_swir1 = img.select('B11');
+    
+    var ndvi = img.normalizedDifference(['B8', 'B4']).toDouble().rename('NDVI');
+    var swir1 = img_swir1.toFloat().rename('SWIR1');
+    var osavi = img.expression("1.16*(nir-red)/(nir+red+0.16)", 
+      { "nir": img_nir, "red": img_red}).float().rename("OSAVI");
+    var tcari = img.expression("3*((re1-red)-0.2*(re1-green)*re1/red)", 
+      { "re1": img_re1, "red": img_red, "green": img_green}).float().rename("TCARI");
+      
+    return img.addBands([ndvi, swir1, osavi, tcari]).select([str_indice]);
+  });
+  
+  // 追加带默认波段的 Dummy Image，防止当前窗口在所有年份都无有效影像导致报错
+  var dummyImage = ee.Image.constant(-9999).rename(str_indice).updateMask(0);
+  var collectionWithDummy = select_s2_final.merge(ee.ImageCollection([dummyImage]));
+  var max_img = collectionWithDummy.max();
+  
+  // 使用 reduceRegion 安全提取像素值
+  var dict = max_img.reduceRegion({
+    reducer: ee.Reducer.first(),
+    geometry: point,
+    scale: 10
+  });
+  
+  var val = dict.get(str_indice);
+  var news2max = ee.Number(ee.Algorithms.If(ee.Algorithms.IsEqual(val, null), -9999, val));
+  return news2max;
+}
+
+/** MVC 提取函数 */
+exports.MVC = function (year_num, img_s2, slideWindow, point, step, str_indice){
+  year_num = ee.Number(parseInt(year_num, 10));
+  step = ee.Number(parseInt(step, 10));
+  
+  // 判断目标年份是否为闰年
+  var isLeap = ee.Algorithms.If(
+    ee.Number(year_num).mod(4).eq(0).and(ee.Number(year_num).mod(100).neq(0)).or(ee.Number(year_num).mod(400).eq(0)), 
+    366, 365
+  );
+  
+  // X轴范围仅保留：目标年全年 + 次年1月份 (31天)
+  var range = ee.Number(isLeap).add(31); 
+  var slidewindow = ee.Number(slideWindow);  
+  var end_index = range.divide(slidewindow).int();
+  
+  var ini_indice_list = ee.List.sequence(0, end_index);
+  
+  var raw_list = ini_indice_list.map(function(index) {
+      // 传递 step 参数进入合成提取流程
+      return s2list_indice(img_s2, year_num, index, slidewindow, point, str_indice, step);
+  });
+  
+  // 空缺值线性插值
+  var indice_list = ini_indice_list.map(function(index){
+      index = ee.Number(index);
+      var val = ee.Number(raw_list.get(index));
+      var prev = ee.Algorithms.If(index.gt(0), raw_list.get(index.subtract(1)), val);
+      var next = ee.Algorithms.If(index.lt(end_index), raw_list.get(index.add(1)), val);
+      
+      prev = ee.Algorithms.If(ee.Number(prev).neq(-9999), prev, 0);
+      next = ee.Algorithms.If(ee.Number(next).neq(-9999), next, 0);
+      
+      var interpolation = ee.Number(prev).add(ee.Number(next)).divide(2);
+      var max = ee.Number(ee.Algorithms.If(val.eq(-9999), interpolation, val));
+      
+      return ee.Algorithms.If(max.eq(-9999), 0, max);
+  });
+  
+  return indice_list;
+}
+
+(*****AIExTool*****)
+/* * * * Auxiliary Information Extraction for single year 
+* * * */
+/* * preparing * */
+var app={
+  data:{
+    sam_import: 'users/zhaotingting/Test_Tookit/Test',
+    target_year: '2020',
+    description: 'AuxiliarySampleDataSet',
+    format_select:'SHP',
+    vali_list: null
+  }
+};
+var file_format = ["CSV","GeoJSON", "KML", "KMZ","SHP","TFRecord"]
+var StudyRegion = ee.Geometry.Polygon([[-179.99,-89.99],[179.99,-89.99],[179.99,89.99],[-179.99,89.99]])
+var AuxiExUtils = require('users/yourset/Algorithms:AuxiliaryExtract')
+
+var mapObj = ui.Map()
+
+var originalFC = ee.FeatureCollection(ee.String(app.data.sam_import));
+var size = originalFC.size();
+app.data.vali_list = originalFC.toList(size);
+var currentFC = originalFC;              
+var actionHistory = [];
+var addedLayerName = 'Samples (working)'
+
+var Label_style = {stretch:'horizontal', fontWeight:"bold", fontSize:"14px"}
+var Textbox_style = {stretch:'horizontal', fontWeight:"bold", fontSize:"8px"}
+
+var select_pros = ['NDVI','NDWI','NDBI','FVC','Elevation','Slope','Soil_Texture','Greenup_1','Greenup_2','Peak_1','Peak_2']
+var checkboxDict = {}
+
+function makeCollapsible(titleText, innerPanel, initiallyOpen) {
+  var caretOpen = '▾ ';
+  var caretClose = '▸ ';
+  var body = ui.Panel({ widgets: [innerPanel], style: { shown: initiallyOpen === true } });
+  var headerBtn = ui.Button({
+    label: (initiallyOpen ? caretOpen : caretClose) + titleText,
+    onClick: function () {
+      var next = !body.style().get('shown');
+      body.style().set('shown', next);
+      headerBtn.setLabel((next ? caretOpen : caretClose) + titleText);
+    },
+    style: {
+      fontWeight: 'bold',
+      fontSize: '12px',
+      padding: '6px 8px',
+      width: '100%',
+      backgroundColor: '#f2f2f2'
+    }
+  });
+  return ui.Panel({
+    widgets: [headerBtn, body],
+    layout: ui.Panel.Layout.flow('vertical'),
+    style: { border: '1px solid #ccc', margin: '8px 0', padding: '0' }
+  });
+}
+
+var loadPropsName_panel = ui.Panel({
+  widgets:[ui.Label("Property Names of Samples:",Label_style)],
+  layout: ui.Panel.Layout.flow('vertical', true),
+  style: {position: 'bottom-right'}
+});
+var _propsPanelAttached = false;
+function attachPropsPanelOnce() {
+  if (!_propsPanelAttached) {
+    mapObj.add(loadPropsName_panel);
+    _propsPanelAttached = true;
+  }
+}
+
+function refreshPropsPanel(fc){
+  loadPropsName_panel.clear()
+  loadPropsName_panel.widgets().set(0, ui.Label("Property Names of Samples:", Label_style))
+  var fea = fc.first()
+  var props = fea ? fea.propertyNames() : ee.List([])
+  props.evaluate(function(names){
+    var propsPanel = ui.Panel({
+      widgets: (names || []).map(function(prop){ return ui.Label(prop) }),
+      layout: ui.Panel.Layout.flow('vertical')
+    })
+    loadPropsName_panel.widgets().set(1, propsPanel)
+  })
+}
+
+var _toastPanel = ui.Panel({
+  widgets: [],
+  style: {
+    position: 'bottom-left',
+    padding: '6px',
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    shown: false,
+    border: '0px'
+  }
+});
+var _toastLabel = ui.Label('', {color: 'white', fontWeight: 'bold'});
+_toastPanel.widgets().set(0, _toastLabel);
+ui.root.add(_toastPanel);
+function notify(msg, color) {
+  _toastLabel.setValue(msg);
+  if (color) _toastLabel.style().set('color', color);
+  _toastPanel.style().set('shown', true);
+  if (ui.util && ui.util.setTimeout) {
+    ui.util.setTimeout(function() {
+      _toastPanel.style().set('shown', false);
+    }, 2500);
+  }
+}
+
+function refreshLayer(centerOnFirst){
+  mapObj.layers().reset()
+  mapObj.addLayer(currentFC, {}, addedLayerName)
+  if (centerOnFirst){
+    currentFC.first().geometry().evaluate(function(g){
+      if (g){ mapObj.centerObject(ee.Geometry(g), 10) }
+    })
+  }
+  attachPropsPanelOnce();
+  refreshPropsPanel(currentFC)
+}
+
+function exporttoURL(){
+  downloadURL_panel.clear()
+  downloadURL_panel.widgets().set(0,ui.Label("The download URL:",{stretch:'horizontal', fontWeight:"bold", fontSize:"14px"}))
+  loadPropsName_panel.clear()
+  loadPropsName_panel.widgets().set(0,ui.Label("Property Names of Samples:",{stretch:'horizontal', fontWeight:"bold", fontSize:"14px"}))
+  
+  mapObj.clear()
+  _propsPanelAttached = false;
+  var new_col = AuxiExUtils.auxiliary_extract(checkboxDict, currentFC, app.data.target_year)
+  var fc = ee.FeatureCollection(new_col)
+  
+  var targetYearNum = ee.Number.parse(app.data.target_year);
+  var startOfYear = ee.Date.fromYMD(targetYearNum, 1, 1);
+  
+  var soilDict = ee.Dictionary({
+    '1': 'clay-粘土', '2': 'silty clay-粉质粘土', '3': 'sandy clay-砂质粘土', '4': 'clay loam-粘壤土',
+    '5': 'silty clay loam-粉质粘壤土', '6': 'sandy clay loam-砂质粘壤土', '7': 'loam-壤土',
+    '8': 'silt loam-粉质壤土', '9': 'sandy loam-砂质壤土', '10': 'silt-粉土',
+    '11': 'loamy sand-壤质砂土', '12': 'sand-砂土', '9999': 'Unknown'
+  });
+
+  // 【修改点1】：在客户端获取复选框的勾选状态
+  var doElevation = checkboxDict['Elevation'].getValue();
+  var doSlope     = checkboxDict['Slope'].getValue();
+  var doNDWI      = checkboxDict['NDWI'].getValue();
+  var doNDVI      = checkboxDict['NDVI'].getValue();
+  var doNDBI      = checkboxDict['NDBI'].getValue();
+  var doFVC       = checkboxDict['FVC'].getValue();
+  var doGreenup1  = checkboxDict['Greenup_1'].getValue();
+  var doPeak1     = checkboxDict['Peak_1'].getValue();
+  var doGreenup2  = checkboxDict['Greenup_2'].getValue();
+  var doPeak2     = checkboxDict['Peak_2'].getValue();
+  var doSoil      = checkboxDict['Soil_Texture'].getValue();
+
+  fc = fc.map(function(f) {
+    var setDict = {}; // 用于动态存储需要更新的属性
+    
+    var parsePheno = function(prop) {
+      var val = f.get(prop);
+      return ee.Algorithms.If(
+        ee.Algorithms.IsEqual(val, null), 'Unknown',
+        ee.Algorithms.If(
+          ee.Algorithms.IsEqual(val, 9999), 'Unknown',
+          startOfYear.advance(ee.Number(val).subtract(1), 'day').format('YYYY-MM-dd')
+        )
+      );
+    };
+    
+    // 只有在勾选了对应参数时，才执行转换并写入 setDict
+    if (doGreenup1) setDict['Greenup_1'] = parsePheno('Greenup_1');
+    if (doPeak1)    setDict['Peak_1']    = parsePheno('Peak_1');
+    if (doGreenup2) setDict['Greenup_2'] = parsePheno('Greenup_2');
+    if (doPeak2)    setDict['Peak_2']    = parsePheno('Peak_2');
+    
+    if (doSoil) {
+      var stVal = f.get('Soil_Texture');
+      // 将 'Soil_Textu' 修改为 'Soil_Type'，避免 Shapefile 的 10 字符截断冲突
+      setDict['Soil_Type'] = ee.Algorithms.If(
+        ee.Algorithms.IsEqual(stVal, null), 'Unknown',
+        ee.Algorithms.If(
+          ee.Algorithms.IsEqual(stVal, 9999), 'Unknown',
+          soilDict.get(ee.Number(stVal).format('%d'), 'Unknown')
+        )
+      );
+    }
+                    
+    return f.set(setDict); // 将新计算的属性追加到原 feature 中（保留了所有原属性）
+  });
+
+  // 【修改点2】：移除了 fc.select()，默认保留所有原有属性和新增属性
+  print('Aux data FC', fc)
+
+  fc.first().geometry().evaluate(function(geom){
+    if (geom){ mapObj.centerObject(ee.Geometry(geom), 10) }
+  })
+  mapObj.addLayer(fc, {}, "Samples with Aux")
+  attachPropsPanelOnce();
+  
+  // 提示用户正在生成链接
+  downloadURL_panel.widgets().set(1, ui.Label("Generating download link..."));
+
+  // 动态获取所有的属性（包括原有的和刚才追加的）
+  fc.first().propertyNames().evaluate(function(names){
+    // 更新右下角的属性列表面板
+    
+    var exportNames = (names || []).filter(function(name) {
+      if (doSoil && (name === 'Soil_Texture' || name === 'Soil_Textu')) {
+        return false; 
+      }
+      return true;
+    });
+    
+    var propsPanel = ui.Panel({
+      widgets: (names || []).map(function(prop){ return ui.Label(prop) }),
+      layout: ui.Panel.Layout.flow('vertical')
+    })
+    loadPropsName_panel.widgets().set(1, propsPanel)
+
+    // 生成带有所有属性的下载链接
+    var downloadUrl = fc.getDownloadURL({
+      format: app.data.format_select,
+      filename: app.data.description,
+      selectors: names  // 使用动态获取的所有属性名
+    });
+    
+    // 将生成的链接展示在面板上
+    downloadURL_panel.widgets().set(1, ui.Label(downloadUrl))
+  })
+}
+
+var downloadURL_panel = ui.Panel({
+  widgets:[ui.Label("The download URL:",Label_style)],
+  layout: ui.Panel.Layout.flow('horizontal', true),
+});
+var import_txt = ui.Label({
+  value:"Auxiliary information Extraction Tool (AIExTool)", style:{stretch:'horizontal', fontWeight:"bold", color:'white',
+        fontSize:"16px", padding:'1px', backgroundColor:'black', height:'18px'}
+})
+var ToolInstructions = ui.Label({
+  value:"Tool Instructions：",
+  style: {stretch:'horizontal', fontWeight:"bold", fontSize:"16px"}
+})
+var tool_manual = ui.Label({
+  value: "This tool is used to extract auxiliary information, including global vegetation cover, vegetation index, soil type, terrain characteristics (elevation, slope), etc."+
+    "The extracted auxiliary data is subsequently imported into the SSD_VCT tool to assist in visual interpretation.",
+  style: {stretch:'horizontal', fontWeight:"bold", fontSize:"14px"}
+})
+var vali_file_title = ui.Label({ value:"Asset filepath", style: Label_style })
+var vali_filepathtxt = ui.Textbox({
+  value: app.data.sam_import,
+ 
+  onChange: function(value) {
+    app.data.sam_import = value
+    originalFC = ee.FeatureCollection(ee.String(app.data.sam_import))
+    currentFC  = originalFC
+    actionHistory = []
+    size = originalFC.size()
+    app.data.vali_list = originalFC.toList(size)
+    refreshLayer(true)
+  },
+  style: Textbox_style
+});
+var checklab = ui.Label('Please select auxiliary information:',{fontWeight:"bold", fontSize:"14px"})
+var check_panel = ui.Panel({widgets:[checklab],layout:ui.Panel.Layout.flow('horizontal',true)});
+select_pros.forEach(function(prop) {
+  var checkbox = ui.Checkbox(prop, false);
+  checkboxDict[prop] = checkbox;
+  check_panel.add(checkbox);
+})
+
+var target_year_label = ui.Label({ value:"Target Year", style: Label_style })
+var target_yeartxt = ui.Textbox({
+  value: app.data.target_year,
+  onChange: function(value) { app.data.target_year = value },
+  style: Textbox_style
+});
+var DownloadLabel = ui.Label({ value:"Download Filename", style: Label_style })
+var Description = ui.Textbox({
+  value: app.data.description, 
+  onChange: function(value) { app.data.description = value },
+  style: Textbox_style
+})
+var FileFormatLabel = ui.Label({ value:"File Format", style: Label_style })
+var FileFormat = ui.Select({
+  items: file_format, 
+  value: app.data.format_select, 
+  onChange: function (value) { app.data.format_select = value },
+  style:Textbox_style
+})
+
+var AuxiExButton = ui.Button({ 
+  label: "Extract Auxiliary Infos and Download",
+  style: Label_style,
+  onClick: exporttoURL
+})
+
+var editTitle = ui.Label({value: 'Edit Samples (Add/Delete)', style: {fontWeight:'bold', fontSize:'14px'}})
+var modeLabel = ui.Label('Mode', {fontWeight:'bold'})
+var modeSelect = ui.Select({
+  items: ['Navigate','Add point','Delete point'],
+  value: 'Navigate',
+  style: {width:'150px'}
+})
+var classPropNameLabel = ui.Label('Class field', {fontWeight:'bold'})
+var classPropNameTxt = ui.Textbox({value: 'Class', style: {width:'140px'}})
+var classPropValLabel = ui.Label('Class value', {fontWeight:'bold'})
+var classPropValTxt = ui.Textbox({value: 'unknown', style: {width:'140px'}})
+var tolLabel = ui.Label('Delete tolerance (m)', {fontWeight:'bold'})
+var tolTxt = ui.Textbox({value: '10000', style: {width:'140px'}})
+var undoBtn = ui.Button({label:'Undo last', onClick: undoLast})
+var resetBtn = ui.Button({label:'Reset to original', onClick: function(){
+  currentFC = originalFC
+  actionHistory = []
+  refreshLayer(true)
+}})
+
+var editPanelInner = ui.Panel([
+  editTitle,
+  ui.Panel([modeLabel, modeSelect], ui.Panel.Layout.flow('horizontal')),
+  ui.Panel([classPropNameLabel, classPropNameTxt, classPropValLabel, classPropValTxt], ui.Panel.Layout.flow('horizontal')),
+  ui.Panel([tolLabel, tolTxt, undoBtn, resetBtn], ui.Panel.Layout.flow('horizontal'))
+], ui.Panel.Layout.flow('vertical'), {margin:'6px 0 6px 0', padding:'6px'});
+var editCollapsible = makeCollapsible('Edit Samples (Add/Delete)', editPanelInner, /* initiallyOpen= */ false);
+mapObj.onClick(function(coords){
+  var mode = modeSelect.getValue()
+  if (mode === 'Add point'){
+    addPointAt(coords)
+  } else if (mode === 'Delete point'){
+    deleteNearestAt(coords)
+  }
+})
+
+function addPointAt(coords){
+  var propName = classPropNameTxt.getValue() || 'class'
+  var propVal  = classPropValTxt.getValue()
+  var geom = ee.Geometry.Point([coords.lon, coords.lat])
+  var feat = ee.Feature(geom)
+              .set(propName, propVal)
+              .set('user_added', true)
+              .set('added_time', ee.Date(Date.now()).format())
+  currentFC = ee.FeatureCollection([feat]).merge(currentFC)
+  actionHistory.push({type:'add', feature: feat})
+  refreshLayer()
+}
+
+function deleteNearestAt(coords){
+  var tol = parseFloat(tolTxt.getValue() || '50')
+  var clickPt = ee.Geometry.Point([coords.lon, coords.lat])
+  var withDist = currentFC.map(function(f){
+    return f.set('tmp_dist', f.geometry().distance(clickPt))
+  })
+ 
+  var nearest = ee.Feature(withDist.sort('tmp_dist').first())
+  var nearestDist = ee.Number(nearest.get('tmp_dist'))
+  nearestDist.evaluate(function(d){
+    if (d == null){ notify('No feature found.', 'orange'); return }
+    if (d > tol){
+      notify('No point within tolerance of ' + tol + ' m (nearest: ' + Math.round(d) + ' m).', 'orange');
+      return
+    }
+    var sid = ee.String(nearest.get('system:index'))
+    currentFC = currentFC.filter(ee.Filter.neq('system:index', sid))
+    actionHistory.push({type:'delete', feature: nearest})
+    refreshLayer()
+  })
+}
+
+function undoLast(){
+  if (actionHistory.length === 0){
+    notify('Nothing to undo.', 'orange');
+    return
+  }
+  var last = actionHistory.pop()
+  if (last.type === 'add'){
+    var geom = ee.Geometry(last.feature.geometry())
+    var pName = classPropNameTxt.getValue() || 'class'
+    var pVal  = last.feature.get(pName)
+    var withDist = currentFC.map(function(f){
+      return f.set('tmp_dist', f.geometry().distance(geom))
+    })
+    var candidate = ee.Feature(withDist
+                    .filter(ee.Filter.eq(pName, pVal))
+                    .sort('tmp_dist')
+                    .first())
+    var cid = ee.String(candidate.get('system:index'))
+    currentFC = currentFC.filter(ee.Filter.neq('system:index', cid))
+  } else if (last.type === 'delete'){
+    currentFC = ee.FeatureCollection([last.feature]).merge(currentFC)
+  }
+  refreshLayer()
+}
+
+var left_panel = ui.Panel({
+  widgets:[
+    import_txt,ToolInstructions, tool_manual,
+    ui.Panel({widgets:[vali_file_title,vali_filepathtxt], layout:ui.Panel.Layout.flow('horizontal')}),
+
+    editCollapsible,
+
+    check_panel,
+    ui.Panel({widgets:[target_year_label,target_yeartxt], layout:ui.Panel.Layout.flow('horizontal')}),
+    ui.Panel({widgets:[DownloadLabel,Description], layout:ui.Panel.Layout.flow('horizontal')}),
+    ui.Panel({widgets:[FileFormatLabel,FileFormat], layout:ui.Panel.Layout.flow('horizontal')}),
+    AuxiExButton,
+    downloadURL_panel
+  ],
+  layout: ui.Panel.Layout.flow('vertical', true)
+});
+var all_panel = ui.SplitPanel({
+  firstPanel: left_panel,
+  secondPanel: mapObj,
+  orientation: 'horizontal',
+  wipe: false,
+})
+  
+/**insert panel on layer**/
+ui.root.widgets().reset([all_panel])
+
+refreshLayer(true)
+
+
+(*****SSD_VCT*****)
+/* For Single-year Sample Dataset Visual Checking Tool */
+/* other default parameter: 2020 / step_year:1 / */
+
+
+// * * SSD_VCT * * //
+/* * preparing * */
+var app={
+  data:{
+    sam_import: 'projects/ee-daisycome08/assets/YourOwnSamplesAsset',
+    vali_index: '0',
+    target_year: '2025',
+    bufferDistance: 5,
+    zoom_size: 16,
+    selectb1:'RED',
+    selectb2:'GREEN',
+    selectb3:'BLUE',
+    chipwidth: 2,
+    
+    slide_window: 10,
+    step_year: 0,
+    
+    property_name1: 'Lab2025',
+    property_name3: 'Conf2025',
+    property_name2: 'ImportProps',
+    primary_label: 0,
+    confidence: 0,
+    Import_props: 0,
+    
+    description: 'Single_YearData',
+    format_select:'CSV',
+    
+    vali_list: null,
+    rawlayer: null,
+    pointlayer: null,
+    clicklayer: null,
+  }
+};
+var curveUtils = require('users/yourset/Algorithms:vi_spectrum')
+var sg_fitting = require('users/yourset/Algorithms:vi_sg')
+var mapObj = ui.Map()
+mapObj.setOptions('SATELLITE')
+var file_format = ["CSV","GeoJSON", "KML", "KMZ","SHP","TFRecord"]
+var Vis_select = ['BLUE','GREEN','RED','NIR','SWIR1','SWIR2']
+var AOI_COLOR = '0000FF'; 
+
+/**
+ * Function to mask clouds using the Sentinel-2 QA band
+ * @ param {ee.Image} image Sentinel-2 image
+ * @ return {ee.Image} cloud masked Sentinel-2 image
+ */
+function maskS2clouds(image) {
+  var qa = image.select('QA60');
+  var cloudBitMask = 1 << 10;// Bits 10 and 11 are clouds and cirrus, respectively.
+  var cirrusBitMask = 1 << 11;
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0)
+    .and(qa.bitwiseAnd(cirrusBitMask).eq(0)); // Both flags should be set to zero, indicating clear conditions.
+  return image.updateMask(mask).divide(10000)
+  .copyProperties(image, ['system:time_start', 'system:time_end']);;
+}
+
+//* * * Add legend of ESA and DW* * //
+function addLegend(ProNames, palette, names) {
+ //Bottom layer of the legend —— Panel
+ var legend = ui.Panel({
+   style: {
+     position: 'bottom-right',
+     padding: '5px 10px',
+     backgroundColor: 'rgba(255, 255, 255, 0.5)'
+   }
+ });
+ //Legend Title
+ var title = ui.Label({
+   value: ProNames + ' Legend',
+   style: {
+     fontWeight: 'bold',
+     color: "red",
+     fontSize: '10px',
+     backgroundColor: 'rgba(255, 255, 255, 0.0)'
+   }
+ });
+ legend.add(title);
+ //Add legend color and description for each column
+ var addLegendLabel = function(color, name) {
+      var showColor = ui.Label({
+        style: {
+          backgroundColor: '#' + color,
+          padding: '6px',
+          margin: '0 0 4px 0'
+        }
+      });
+      var desc = ui.Label({
+        value: name,
+        style: {
+          fontSize: '10px',
+          backgroundColor: 'rgba(255, 255, 255, 0.0)',
+          margin: '0 0 4px 8px'}
+      });
+     //Colors and instructions are placed horizontally
+      return ui.Panel({
+        widgets: [showColor, desc],
+        layout: ui.Panel.Layout.Flow('horizontal'),
+        style: {backgroundColor: 'rgba(255, 255, 255, 0.0)'}
+      });
+ };
+ //Add all legend lists
+ for (var i = 0; i < palette.length; i++) {
+    var label = addLegendLabel(palette[i], names[i]);
+    legend.add(label);
+ }  
+ return legend
+}
+
+// Import ESA WorldCover
+var className_ESA = ['Tree cover','Cropland','Shrubland','Grassland','Herbaceous wetland','Mangroves','Permanent water bodies',
+      'Moss and lichen','Built-up','Bare / sparse vegetation','Snow and ice']
+var palette_ESA = ['006400','f096ff','ffbb22','ffff4c','0096a0','00cf75','0064c8','fae6a0','fa0000','b4b4b4','f0f0f0']
+var ESA_WC = ee.ImageCollection('ESA/WorldCover/v100').first();
+var ESA_visualization = {bands: ['Map']};
+
+// Import Dynamic World
+var className_DW = ['trees','crops','shrub_and_scrub','grass','flooded_vegetation','water','built','bare','snow_and_ice'];
+var palette_DW = ['006400','f096ff','ffbb22','ffff4c','0096a0','0064c8','fa0000','b4b4b4','f0f0f0'];
+var dynamic_world = ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1')
+                    .filterDate(app.data.target_year+'-01-01',app.data.target_year+'-12-31')
+var dynamic_world_major = (dynamic_world.select('label')).reduce(ee.Reducer.mode()).rename('label')
+var dwRgb = dynamic_world_major.select('label').visualize({min: 0, max: 8, palette: palette_DW}).divide(255);
+
+var vali_featureCollection = ee.FeatureCollection(ee.String(app.data.sam_import));
+var size = vali_featureCollection.size();
+app.data.vali_list = vali_featureCollection.toList(size);
+
+/* * Visualization Parameter Setting and Some Information Display* */
+var right_panel = ui.Panel({
+  layout: ui.Panel.Layout.flow('horizontal', true),
+  style: {width:'40%', backgroundColor: '#d3d3d3'}
+});
+
+function disp_samImg(){
+  mapObj.clear()
+  right_panel.clear()
+  mapObj.setOptions('SATELLITE')
+  down_right_panel.clear()
+  
+//import sample data 
+  var number = ee.Number.parse(app.data.vali_index);
+  var feature = ee.Feature(app.data.vali_list.get(number)).geometry();
+  var vali_feature = ee.Feature(app.data.vali_list.get(number));  
+  mapObj.centerObject(feature,app.data.zoom_size);         
+  var final_feature = feature.buffer(Number(app.data.bufferDistance)).bounds();
+  
+  /* Display ESA WorldCover and Dynamic World datasets*/
+  var region_clip = feature.buffer(10000).bounds()
+  var ESA_WC_Tile = ESA_WC.clip(region_clip)
+  var dwRgb_Tile = dwRgb.clip(region_clip)
+  mapObj.addLayer(ESA_WC_Tile, ESA_visualization, 'ESA WorldCover');
+  var ESA_legend = addLegend('ESA_WC', palette_ESA, className_ESA,false)
+  mapObj.add(ESA_legend)
+  
+  mapObj.addLayer(dwRgb_Tile, {}, 'Dynamic World'+app.data.target_year,false);
+  var DW_legend = addLegend('DW',palette_DW, className_DW)
+  mapObj.add(DW_legend)
+  
+  mapObj.addLayer(final_feature,{color:'#151BFF'},("sample_point" + app.data.vali_index),true);
+
+  /*Display image cards to the card panel*/
+  var aoiBox = feature.buffer(app.data.chipwidth * 1000/2)
+  
+  // 修改：选择并重命名 Sentinel-2 波段
+  var sentinel_dataset = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+                  .filterDate(app.data.target_year + '-01-01', app.data.target_year + '-12-31')
+                  .filterBounds(aoiBox)
+                  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE',50))
+                  .map(maskS2clouds)
+                  .select(['B2', 'B3', 'B4', 'B8', 'B11', 'B12'], 
+                          ['BLUE', 'GREEN', 'RED', 'NIR', 'SWIR1', 'SWIR2']); 
+                          
+  displayBrowseImg(sentinel_dataset, aoiBox, final_feature) // 此处将Landsat换为sentinel
+}
+
+//Jump Google Earth Web
+var GE_button = ui.Button({
+  label:'Open in Google Earth/Bing Map',
+  style: {stretch:'horizontal', fontWeight:"bold", fontSize:"12px"},
+  onClick: function() {
+    // 获取部件数量
+    var widgets = import_data_panel.widgets()
+    var count = widgets.length()
+    // 如果Panel不为空，移除最后一个部件
+    if (count > 12) {
+      import_data_panel.remove(widgets.get(count - 1)); // 从Panel中移除最后一个部件
+      import_data_panel.remove(widgets.get(count - 2))
+    }
+    
+    var number = ee.Number.parse(app.data.vali_index);
+    var feature = ee.Feature(app.data.vali_list.get(number)).geometry();
+    var coordinates = feature.coordinates().getInfo()
+    var lat = coordinates[1];  // 纬度
+    var lon = coordinates[0]; // 经度
+    var GE_url = 'https://earth.google.com/web/@' + lat + ',' + lon + ',100000a,0d,0y,0h,0t,0r';
+    print('Google Earth url',GE_url)
+    var link_GE = ui.Label('Click Jump to Google Earth', {fontWeight: 'bold', color: 'blue', fontSize:"12px"})
+    link_GE.setUrl(GE_url)
+
+    var Bing_url = 'https://www.bing.com/maps?cp='+lat+'~'+lon+'&lvl=15&style=h'; // 纬度~经度
+    var link_Bing = ui.Label('Click Jump to Bing Maps', {fontWeight: 'bold', color: 'blue', fontSize:"12px"})
+    link_Bing.setUrl(Bing_url)
+    print('Bing Maps url',Bing_url)
+    
+    import_data_panel.add(link_GE)
+    import_data_panel.add(link_Bing)
+  }
+})
+
+var visualization = {min: 0.0, max: 0.3, bands: ['RED', 'GREEN', 'BLUE']}
+
+function displayBrowseImg(sentinel_dataset, aoiBox, aoiCircle){
+  var RGB_PARAMS = {bands: [app.data.selectb1,app.data.selectb2,app.data.selectb3], min:0.0, max:0.3}
+  
+  // Sentinel-2 均值影像 Display
+  var sentinel_img = sentinel_dataset.mean() 
+  var aoiImg = ee.Image().byte()
+    .paint(ee.FeatureCollection(ee.Feature(aoiCircle)), 2, 5)
+    .visualize({palette: AOI_COLOR});
+    
+  var sentinel_thumbnail = ui.Thumbnail({
+    image: sentinel_img.visualize(visualization).blend(aoiImg),
+    params: {region: aoiBox, dimensions: '200', crs: 'EPSG:3857', format: 'PNG'}
+  });
+  
+  var Sentinel_Card = ui.Panel([ui.Label('Sentinel-2 Mean',
+    {margin: '4px 4px -6px 8px', fontSize: '13px', fontWeight: 'bold'}),
+    sentinel_thumbnail], null, {margin: '4px 0px 0px 4px' , width: 'px'});
+  right_panel.add(Sentinel_Card);
+  
+  // ================= 2. 增加 Sentinel-1 VH Entropy 显示 =================
+  // 获取目标年内 Sentinel-1 VH 集合
+  var s1_col = ee.ImageCollection('COPERNICUS/S1_GRD')
+    .filterBounds(aoiBox)
+    .filterDate(app.data.target_year + '-01-01', app.data.target_year + '-12-31')
+    // .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VH'))
+    .filter(ee.Filter.eq('instrumentMode', 'IW'))
+    // .select('VH');
+
+  // 获取年度最大值，并裁剪到可视窗口（极大提高计算效率）
+  // var s1_vh_max = s1_col.select('VH').max().clip(aoiBox);
+  var s1_vh_max = s1_col.select('VH').max();
+
+  // 将 dB 值 (通常在 -30 到 0 之间) 映射为非负整型，满足 GLCM 函数要求
+  // 例如：-20dB -> (-20 + 30) * 10 = 100
+  var s1_int = s1_vh_max.clamp(-25, -5)   // 截断异常极端值
+                 .subtract(-25)           // 将最小值平移到 0
+                 .divide(20)              // 归一化到 0~1
+                 .multiply(32)            // 扩展为 32 个灰度级
+                 .toInt();                // 转为整型
+
+  // 计算 GLCM 纹理并专门提取 Entropy (熵)，邻域窗口设为 3 (7x7像素)
+  var vh_entropy = s1_int.glcmTexture({size: 3}).select('VH_ent');
+  
+  var ent_stats = vh_entropy.reduceRegion({
+    reducer: ee.Reducer.percentile([2, 98]),
+    geometry: aoiBox,
+    scale: 10,
+    maxPixels: 1e6
+  });
+  var ent_min = ee.Number(ent_stats.get('VH_ent_p2'));
+  var ent_max = ee.Number(ent_stats.get('VH_ent_p98'));
+  
+  var diff = ent_max.subtract(ent_min);
+  ent_max = ee.Algorithms.If(diff.lt(0.5), ent_min.add(2.0), ent_max);
+  ent_min = ee.Algorithms.If(diff.lt(0.5), ent_min.subtract(1.0), ent_min);
+  var stretched_ent = vh_entropy.unitScale(ent_min, ent_max).clamp(0, 1);
+  
+  // 设置可视化参数 (自然状态下农田纹理的熵值一般落在 0~5 的区间)
+  // var ent_vis = {min: 0, max: 6, palette: ['black', 'yellow', 'red']};
+  var ent_vis = {min: 0, max: 1, palette: ['black', 'yellow', 'red']};
+  
+  var s1_thumbnail = ui.Thumbnail({
+    image: stretched_ent.visualize(ent_vis).blend(aoiImg),
+    params: {region: aoiBox, dimensions: '200', crs: 'EPSG:3857', format: 'PNG'}
+  });
+
+  var S1_Ent_Card = ui.Panel([ui.Label('Sentinel-1 VH Entropy',
+    {margin: '4px 4px -6px 8px', fontSize: '13px', fontWeight: 'bold'}),
+    s1_thumbnail], null, {margin: '4px 0px 0px 4px' , width: 'px'});
+  right_panel.add(S1_Ent_Card);
+  
+// ================= 2.5 增加 Sentinel-1 假彩色 (False Color) 显示 =================
+  // SAR 图像可视化标准做法：使用年度中值(median)过滤斑点噪声，让地块更清晰
+  // var s1_median = s1_col.median().clip(aoiBox);
+  var s1_median = s1_col.median();
+  
+  var vv = s1_median.select('VV');
+  var vh = s1_median.select('VH');
+  // dB单位下，波段相除(VV/VH) 等价于减法运算(VV - VH)
+  var vv_sub_vh = vv.subtract(vh).rename('VV_minus_VH');
+  
+  var s1_false_color = ee.Image.cat([vv, vh, vv_sub_vh]);
+  print(s1_false_color)
+  // R (VV): -18 到 0 dB  |  G (VH): -25 到 -5 dB  |  B (VV-VH): 2 到 15 dB
+  var s1_rgb_vis = s1_false_color.visualize({
+    bands: ['VV', 'VH', 'VV_minus_VH'],
+    min: [-18, -25, 2],
+    max: [0, -5, 15]
+  });
+
+  var s1_fc_thumbnail = ui.Thumbnail({
+    image: s1_rgb_vis.blend(aoiImg),
+    params: {region: aoiBox, dimensions: '200', crs: 'EPSG:3857', format: 'PNG'}
+  });
+
+  var S1_FC_Card = ui.Panel([ui.Label('Sentinel-1 False Color',
+    {margin: '4px 4px -6px 8px', fontSize: '13px', fontWeight: 'bold'}),
+    s1_fc_thumbnail], null, {margin: '4px 0px 0px 4px' , width: 'px'});
+  right_panel.add(S1_FC_Card);
+  
+  
+  // Sentinel-2 每月最大合成图 Display (替换原有的 Landsat)
+  var dates = ee.List.sequence(1, 12, 1);
+  var aoiImg2 = ee.Image().byte()
+    .paint(ee.FeatureCollection(ee.Feature(aoiCircle)), 2, 5)
+    .visualize({palette: AOI_COLOR});
+    
+  dates.evaluate(function(dates){
+    dates.forEach(function(date) {
+      // 在这里直接从 sentinel_dataset 进行月度提取
+      var img = sentinel_dataset.filter(ee.Filter.calendarRange(date,date,'month')).median();
+      var thumbnail = ui.Thumbnail({
+        image: img.visualize(RGB_PARAMS).blend(aoiImg2),
+        params: {region:aoiBox, dimensions:'200', crs:'EPSG:3857', format:'PNG'}
+      });
+      var imgCard = ui.Panel([
+          ui.Label(date + '/' + app.data.target_year, {margin:'4px 4px -6px 8px', fontSize:'13px', fontWeight:'bold'}),
+          thumbnail
+        ], null, {margin:'4px 0px 0px 4px' , width:'px'});
+      right_panel.add(imgCard);
+    });
+  });
+}
+
+/* * Auxiliary Information Display * */
+var down_mid_txt = ui.Label({
+  value:"Show Auxiliary Infors and Interpreted Data",
+  style:{stretch: 'horizontal',fontWeight: "bold",color:'gray',
+        fontSize: "12px",padding: '1px',height:'18px'}
+})
+var down_mid_panel = ui.Panel({
+  widgets:[down_mid_txt],
+  style: {
+    height: '30%',
+    width: '30%',
+    position: 'bottom-center',
+    padding: '0px',
+    margin: '0px',
+    border: '0px',
+    stretch: 'both',
+    backgroundColor: 'rgba(255, 255, 255, 0.5)'
+  } 
+});
+// function auxi_data_disp(){
+//   //import sample data 
+//   var number = ee.Number.parse(app.data.vali_index);
+//   var feature = ee.Feature(app.data.vali_list.get(number)).geometry();
+//   var vali_feature = ee.Feature(app.data.vali_list.get(number));
+//   //Get Auxiliary  Information
+//   var prop_name = vali_feature.propertyNames().remove('system:index')
+//   prop_name = prop_name.sort()
+//   var prop_info = vali_feature.toArray(prop_name)
+//   prop_info = prop_info.reshape([1,prop_name.length()])
+//   var inter1_chart = ui.Chart.array.values(prop_info,1,prop_name).setSeriesNames(['MultiLabs']).setChartType('Table')
+//   down_mid_panel.widgets().set(0,inter1_chart)
+// }
+function auxi_data_disp(){
+  // 获取样本数据
+  var number = ee.Number.parse(app.data.vali_index);
+  var feature = ee.Feature(app.data.vali_list.get(number));
+  
+  // 提取属性名并排序
+  var prop_name = feature.propertyNames().remove('system:index').sort();
+  var dict = feature.toDictionary(prop_name);
+  
+  // 将字典转换为键值对列表
+  var kvList = prop_name.map(function(key) {
+    // 强制转换为字符串格式，确保表格渲染稳定
+    return ee.Feature(null, {
+      'Property': key, 
+      'Value': ee.String(dict.get(key)) 
+    });
+  });
+  
+  var kvFC = ee.FeatureCollection(kvList);
+  
+  // 生成纵向排列的表格，指定 X 轴为 Property，Y 轴为 Value
+  var inter1_chart = ui.Chart.feature.byFeature(kvFC, 'Property', 'Value')
+    .setChartType('Table')
+    .setOptions({pageSize: 30});
+    
+  down_mid_panel.widgets().set(0, inter1_chart);
+}
+  
+/* * import data * */ 
+var Label_style = {stretch:'horizontal', fontWeight:"bold", fontSize:"12px"}
+var Textbox_style = {stretch:'horizontal', fontWeight:"bold", fontSize:"6px"}
+function data_import(){
+  var import_txt = ui.Label({
+    value:"Initial data imported", style:{stretch:'horizontal', fontWeight:"bold", color:'white',
+          fontSize:"12px", padding:'1px', backgroundColor:'black', height:'18px'}
+  })
+  var vali_file_title = ui.Label({
+    value:"Asset filepath",
+    style: Label_style
+  })
+  var vali_filepathtxt = ui.Textbox({
+    value: app.data.sam_import,
+    onChange: function(value) {
+      app.data.sam_import = value
+      var vali_featureCollection = ee.FeatureCollection(ee.String(app.data.sam_import));
+      var size = vali_featureCollection.size();
+      app.data.vali_list = vali_featureCollection.toList(size);
+    },
+    style: Textbox_style
+  });
+  var target_year_label = ui.Label({
+    value:"Target Year",
+    style: Label_style
+  })
+  var target_yeartxt = ui.Textbox({
+    value: app.data.target_year,
+    onChange: function(value) {app.data.target_year = value},
+    style: Textbox_style
+  });
+  
+  var ZoomScale_label = ui.Label({
+    value:"Zoom Scale",
+    style: Label_style
+  })
+  var ZoomScaletxt = ui.Textbox({
+    value: app.data.zoom_size,
+    onChange: function(value) {app.data.zoom_size = value},
+    style: Textbox_style
+  });
+  
+  var vali_title = ui.Label({
+    value:"Sample ID",
+    style: Label_style
+  });
+  var validationtxt = ui.Textbox({
+    value: app.data.vali_index,
+    onChange: function(value){app.data.vali_index = value},
+    style: Textbox_style
+  });
+  var BufferDis_label = ui.Label({
+    value:"Buffer Distance of Sample",
+    style: Label_style
+  })
+  var BufferDistxt = ui.Textbox({
+    value: app.data.bufferDistance,
+    onChange: function(value) {app.data.bufferDistance = value},
+    style: Textbox_style
+  });
+  
+  var show_select_txt = ui.Label({
+    value: "Synthetic band",
+    style: Label_style
+  })    
+  var show_selectb1 = ui.Select({
+    items: Vis_select, 
+    value: app.data.selectb1,
+    onChange: function(value) {app.data.selectb1 = value},
+    style: Textbox_style
+  })
+  var show_selectb2 = ui.Select({
+    items: Vis_select, 
+    value: app.data.selectb2,
+    onChange: function(value) {app.data.selectb2 = value},
+    style: Textbox_style
+  })
+  var show_selectb3 = ui.Select({
+    items: Vis_select, 
+    value: app.data.selectb3,
+    onChange: function(value) {app.data.selectb3 = value},
+    style: Textbox_style
+  })
+  // Region buffer.
+  var regionWidthLabel = ui.Label({
+    value: 'Image chip width (km)', style: Label_style
+  });
+  var regionWidthSlider = ui.Slider({
+    min: 0.2, max: 10, value: app.data.chipwidth,
+    onChange: function(value){
+      app.data.chipwidth = value
+    }, step: 0.2, style: Label_style
+  });
+  var dispimg_button = ui.Button({
+    label: "Show sample and images!",
+    onClick: disp_samImg,
+    style: Label_style
+  })
+  var disp_auxiliary_button = ui.Button({
+    label: "Show auxiliary infos!",
+    onClick: auxi_data_disp,
+    style: Label_style
+  })
+  
+  var import_data_panel = ui.Panel({
+    widgets:[import_txt, ui.Panel({
+        widgets:[vali_file_title, vali_filepathtxt], layout:ui.Panel.Layout.flow('horizontal')
+      }), ui.Panel({
+        widgets:[target_year_label, target_yeartxt], layout:ui.Panel.Layout.flow('horizontal')
+      }), ui.Panel({
+        widgets:[BufferDis_label, BufferDistxt], layout:ui.Panel.Layout.flow('horizontal')
+      }), ui.Panel({
+        widgets:[ZoomScale_label, ZoomScaletxt], layout:ui.Panel.Layout.flow('horizontal')
+      }), ui.Panel({
+        widgets:[vali_title, validationtxt], layout:ui.Panel.Layout.flow('horizontal')
+      }), ui.Panel({
+        widgets:[show_select_txt, show_selectb1, show_selectb2, show_selectb3], layout:ui.Panel.Layout.flow('horizontal')
+      }),ui.Panel({
+        widgets:[regionWidthLabel, regionWidthSlider], layout:ui.Panel.Layout.flow('horizontal')
+      }), dispimg_button, disp_auxiliary_button,GE_button],
+    layout:ui.Panel.Layout.flow('vertical')
+  })
+  return import_data_panel
+}
+
+/* * Add property to dataset * */
+// function alter_pro(){
+//   //import sample data 
+//   var num = ee.Number.parse(app.data.vali_index);
+//   var feature = ee.Feature(app.data.vali_list.get(num))
+//   var prop_name = feature.propertyNames()
+//   var old_feature = ee.Feature(app.data.vali_list.get(num)).select(prop_name)
+//   var new_feature = old_feature.set(
+//       app.data.property_name1,app.data.primary_label,
+//       app.data.property_name3,app.data.confidence,
+//       app.data.property_name2,app.data.Import_props
+//       )
+//   app.data.vali_list = app.data.vali_list.replace(old_feature, new_feature)
+//   //Get All  Information
+//   var final_feature = ee.Feature(new_feature)
+//   down_mid_panel.clear()
+//   var prop_name = final_feature.propertyNames().remove('system:index')
+//   prop_name = prop_name.sort()
+//   var prop_info = final_feature.toArray(prop_name)
+//   prop_info = prop_info.reshape([1,prop_name.length()])
+//   var inter_chart = ui.Chart.array.values(prop_info,1,prop_name).setSeriesNames(['MultiLabs']).setChartType('Table')
+//   down_mid_panel.widgets().set(0,inter_chart)
+// }
+function alter_pro(){
+  // 获取并更新样本数据
+  var num = ee.Number.parse(app.data.vali_index);
+  var old_feature = ee.Feature(app.data.vali_list.get(num));
+  
+  var new_feature = old_feature.set(
+      app.data.property_name1, app.data.primary_label,
+      app.data.property_name3, app.data.confidence,
+      app.data.property_name2, app.data.Import_props
+  );
+  app.data.vali_list = app.data.vali_list.replace(old_feature, new_feature);
+  
+  var final_feature = ee.Feature(new_feature);
+  down_mid_panel.clear();
+  
+  // 提取属性名并排序
+  var prop_name_sorted = final_feature.propertyNames().remove('system:index').sort();
+  var dict = final_feature.toDictionary(prop_name_sorted);
+  
+  // 将字典转换为键值对列表
+  var kvList = prop_name_sorted.map(function(key) {
+    return ee.Feature(null, {
+      'Property': key, 
+      'Value': ee.String(dict.get(key))
+    });
+  });
+  
+  var kvFC = ee.FeatureCollection(kvList);
+  
+  // 生成纵向排列的表格
+  var inter_chart = ui.Chart.feature.byFeature(kvFC, 'Property', 'Value')
+    .setChartType('Table')
+    .setOptions({pageSize: 30});
+    
+  down_mid_panel.widgets().set(0, inter_chart);
+}
+
+/* * Export new dataset added property * */
+function exporttoURL(){
+  downloadURL_panel.clear()
+  downloadURL_panel.widgets().set(0,ui.Label("The download URL:",Label_style))
+  var fc = ee.FeatureCollection(app.data.vali_list);
+  var downloadUrl = fc.getDownloadURL({
+    format: app.data.format_select,
+    filename: app.data.description
+  });
+  downloadURL_panel.widgets().set(1,ui.Label(downloadUrl))
+}
+
+// function exporttodrive(){
+//   //import sample data 
+//   Export.table.toDrive({
+//     collection: ee.FeatureCollection(app.data.vali_list),
+//     description: app.data.description,
+//     folder: app.data.folder, 
+//     fileFormat: app.data.format_select
+//   });
+// } 
+// function exporttoAsset(){
+//   //import sample data 
+//   Export.table.toAsset({
+//     collection: ee.FeatureCollection(app.data.vali_list),
+//     description: app.data.description,
+//     assetId: app.data.assetsID
+//   });
+// }
+var downloadURL_panel = ui.Panel({
+  widgets:[ui.Label("The download URL:",Label_style)],
+  layout: ui.Panel.Layout.flow('horizontal', true),
+  //style: {width:'40%', backgroundColor: '#d3d3d3'}
+});
+
+/* * Initialize UI interface * */
+var down_right_txt = ui.Label({
+  value:"Show phenological information",
+  style:{stretch: 'horizontal',fontWeight: "bold",color:'gray',
+        fontSize: "12px",padding: '1px',height:'18px'}
+})
+var down_right_panel = ui.Panel({ 
+  widgets:[down_right_txt],
+  style: {
+    height: '20%',
+    position: 'bottom-center',
+    padding: '0px',
+    margin: '0px',
+    border: '0px',
+    stretch: 'both',
+    backgroundColor: 'rgba(255, 255, 255, 0.5)'
+  } 
+});
+var indice_txt = ui.Label({
+  value:"Show VI & CHIRPS Precipitation", style:{stretch:'horizontal', fontWeight:"bold", color:'white',
+     fontSize:"12px", padding:'1px', backgroundColor:'black', height:'18px'}
+})
+var step_txt = ui.Label({
+  value:'Select year step',
+  style: Label_style
+})
+var step_year = ui.Slider({
+  min:0, max:10,
+  value:app.data.step_year,
+  step:1,
+  onChange:function(value){
+    app.data.step_year = parseInt(value, 10)
+  },
+  style:Label_style
+})
+/**vi curve**/
+var ndvi_txt = ui.Label({
+  value:'Show VI & Precip charts',
+  style: Label_style
+})
+
+var dis_ndvi_button = ui.Button({
+  label:'Show',
+  style: Label_style,
+  onClick:function(){
+    var number = ee.Number.parse(app.data.vali_index);
+    var feature = ee.Feature(app.data.vali_list.get(number)).geometry();
+    
+    down_right_panel.clear();
+    
+    function maskS2clouds(image) {
+      var qa = image.select('QA60');
+      var cloudBitMask = 1 << 10;
+      var cirrusBitMask = 1 << 11;
+      var mask = qa.bitwiseAnd(cloudBitMask).eq(0).and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+      return image.updateMask(mask).divide(10000).copyProperties(image, ['system:time_start', 'system:time_end']);
+    }
+    
+    var targetYear = parseInt(app.data.target_year);
+    var step = parseInt(app.data.step_year);
+    var nextYearStr = (targetYear + 1).toString();
+    
+    // 1. 为支持后端合成，扩大 S2 集合拉取范围： [targetYear - step] 到 [targetYear + step] + 次年1月
+    var startYearStr = (targetYear - step).toString();
+    var endYearStr = (targetYear + step + 1).toString(); 
+    
+    var S2_Collect = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+      .filterBounds(feature)
+      .filterDate(startYearStr + '-01-01', endYearStr + '-01-31')
+      .map(maskS2clouds);
+      
+    // 2. 将显示限制回调至“单一完整周期 (目标年12个月 + 次年1个月)”
+    var isLeap = (targetYear % 4 === 0 && targetYear % 100 !== 0) || (targetYear % 400 === 0);
+    var totalExtendedDays = (isLeap ? 366 : 365) + 31; 
+    
+    var range = ee.Number(totalExtendedDays); 
+    var end_index = range.divide(app.data.slide_window).int();
+    
+    var x_axis = ee.List.sequence(0, end_index).map(function(j){
+      return ee.Number(j).multiply(app.data.slide_window);
+    });
+
+    var febDays = isLeap ? 29 : 28;
+    var monthDays = [31, febDays, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31, 31]; 
+    
+    var monthTicks = [];
+    var currentDay = 0;
+    for (var m = 1; m <= 13; m++) { 
+      var displayMonth = m;
+      var displayYear = targetYear;
+      if (m === 13) {
+        displayMonth = 1; 
+        displayYear = targetYear + 1;
+      }
+      var monthStr = (displayMonth < 10 ? '0' : '') + displayMonth;
+      // 保持 YY-MM 刻度，让图表末尾清楚看到跨入了下一年
+      monthTicks.push({v: currentDay, f: monthStr}); 
+      currentDay += monthDays[m - 1];
+    }
+    
+    var indices = ['NDVI', 'SWIR1', 'OSAVI', 'TCARI'];
+    
+    indices.forEach(function(indexName) {
+      // 传入 step 参与底层影像运算合并
+      var actual_list = curveUtils.MVC(app.data.target_year, S2_Collect, app.data.slide_window, feature, app.data.step_year, indexName);
+      var sg_list = sg_fitting.ndvi_sg(actual_list, feature);
+      var all_values = ee.Array.cat([actual_list, actual_list, sg_list], 1);
+      
+      var chart = ui.Chart.array.values(all_values, 0, x_axis)
+        .setSeriesNames(['Actual value', 'Line chart', 'Savitzky-Golay fitting']).setOptions({
+          title: 'Composite ' + indexName + ' (Step: ' + step + ' Yrs) | View: ' + app.data.target_year + ' ~ ' + nextYearStr + '-01',
+          hAxis: {
+            title: 'Time',
+            ticks: monthTicks,
+            viewWindow: { min: 0, max: totalExtendedDays } 
+          }, 
+          vAxis: {title: 'Sample ' + app.data.vali_index + ' ' + indexName},
+          legend: null,
+          series: { 
+            0:{ lineWidth: 0, pointSize: 3},
+            1: { lineWidth: 1,pointSize: 0, color: 'orange'},
+            2: { lineWidth: 2, pointSize: 0, color: 'red' }
+          }
+        });
+      down_right_panel.add(chart);
+    });
+  
+   // 3. 降水图表 (CHIRPS) 仅呈现目标年实际降水，不参与邻近年合成
+    var startDate = app.data.target_year + '-01-01';
+    var endDate = nextYearStr + '-01-31'; 
+    
+    var chirps = ee.ImageCollection("UCSB-CHC/CHIRPS/V3/DAILY_RNL")
+      .filterBounds(feature)
+      .filterDate(startDate, ee.Date(endDate).advance(1, 'day'))
+      .select('precipitation')
+      .map(function(img) {
+        return img.unmask(0).copyProperties(img, ['system:time_start']);
+      });
+      
+    var precipChart = ui.Chart.image.series({
+      imageCollection: chirps,
+      region: feature,
+      reducer: ee.Reducer.mean(),
+      scale: 5000, 
+      xProperty: 'system:time_start'
+    }).setOptions({
+      title: 'Real Daily Precipitation (CHIRPS) in ' + app.data.target_year,
+      hAxis: {title: 'Time (Daily)', format: 'YY-MM-dd'}, 
+      vAxis: {title: 'Precipitation (mm)', viewWindow: {min: 0}},
+      colors: ['#0000FF'],
+      lineWidth: 1,
+      pointSize: 2,
+      legend: {position: 'none'}
+    });
+    
+    down_right_panel.add(precipChart);
+  }
+});
+
+var curvepanel = ui.Panel({
+  widgets:[indice_txt, ui.Panel({
+      widgets:[step_txt,step_year], layout:ui.Panel.Layout.flow('horizontal')
+    }), ui.Panel({
+      widgets:[ndvi_txt,dis_ndvi_button], layout:ui.Panel.Layout.flow('horizontal')
+    })
+  ],
+  layout:ui.Panel.Layout.flow('vertical')
+})
+/**interpret layer**/
+var info_txt = ui.Label({
+  value:'Import interpreted information',
+  style:{stretch: 'horizontal',fontWeight: "bold",color:'white',
+        fontSize: "12px",padding: '1px',backgroundColor:'black',height:'18px'}
+})
+var property_name_txt = ui.Label({
+  value:'Properties:Primary Label/Confidence',
+  style: Label_style
+})
+var property_name1 = ui.Textbox({
+  placeholder: 'Primary_Lab',
+  value: app.data.property_name1,
+  onChange: function(value) {app.data.property_name1 = value},
+  style: Textbox_style
+})
+var property_name3 = ui.Textbox({
+  placeholder: 'Confidence_level',
+  value: app.data.property_name3,
+  onChange: function(value) {app.data.property_name3 = value},
+  style: Textbox_style
+})
+var import_pri = ui.Textbox({
+  placeholder: 'Primary Label',
+  value: app.data.primary_label,
+  onChange: function(value) {app.data.primary_label = parseInt(value, 10)},
+  style: Textbox_style
+})
+var import_conf = ui.Textbox({
+  placeholder: 'Confidence',
+  value: app.data.confidence,
+  onChange: function(value){app.data.confidence = parseInt(value, 10)},
+  style: Textbox_style
+})
+var property_name2 = ui.Textbox({
+  placeholder: 'Wanted Props',
+  value: app.data.property_name2,
+  onChange: function(value) {app.data.property_name2 = value},
+  style: Textbox_style
+})
+var import_WantedProps = ui.Textbox({
+  placeholder: 'Wanted Props',
+  value: app.data.Import_props,
+  onChange: function(value) {app.data.Import_props = parseInt(value, 10)},
+  style: Textbox_style
+})
+var alter_probutton = ui.Button({ 
+  label: "Change Property and Show Results",
+  style: Label_style,
+  onClick: alter_pro
+});
+/**Save layer**/
+var saveinfo_txt = ui.Label({
+  value:'Save interpreted information',
+  style:{stretch: 'horizontal',fontWeight: "bold",color:'white',
+        fontSize: "12px",padding: '1px',backgroundColor:'black',height:'18px'}
+})
+var name_save_txt = ui.Label({
+  value:'Description/FileFormat',
+  style: Label_style
+})
+var Description = ui.Textbox({
+  value: app.data.description, 
+  onChange: function(value) {app.data.description = value},
+  style: Textbox_style
+})
+var FileFormat = ui.Select({
+  items: file_format, 
+  value: app.data.format_select, 
+  onChange: function (value) {app.data.format_select = value},
+ style:Textbox_style
+})
+var saveURL_button = ui.Button({ 
+  label: "Get Download URL",
+  style: Label_style,
+  onClick: exporttoURL
+});
+
+var interpanel = ui.Panel({
+  widgets: [info_txt,property_name_txt,ui.Panel({
+      widgets:[property_name1, property_name3, property_name2], layout:ui.Panel.Layout.flow('horizontal')
+    }), ui.Panel({
+      widgets:[import_pri, import_conf, import_WantedProps], layout:ui.Panel.Layout.flow('horizontal')
+    }), alter_probutton, saveinfo_txt,name_save_txt, ui.Panel({
+      widgets:[Description, FileFormat], layout:ui.Panel.Layout.flow('horizontal')
+    }),saveURL_button,downloadURL_panel
+  ],
+  style: {stretch: 'horizontal'},
+  layout:ui.Panel.Layout.flow('vertical')
+})
+
+/**constuct layer**/
+var import_data_panel = data_import()
+var left_panel = ui.Panel({
+  widgets: [import_data_panel, curvepanel, interpanel],
+  layout: ui.Panel.Layout.flow('vertical'),
+  style: {
+      width: '30%',
+      position: 'top-left',
+      padding: '0px',
+      margin: '0px',
+      border: '0px',
+      stretch: 'both',
+      backgroundColor:'rgba(255, 255, 255, 0.5)'}
+})
+var down_panel = ui.Panel({
+  widgets: [ui.SplitPanel({
+    firstPanel: down_mid_panel,
+    secondPanel: down_right_panel,
+    orientation: 'horizontal'
+  })],
+  style: {height: '30%'}
+})
+var up_downmid_panel = ui.Panel({
+  widgets:[ui.SplitPanel({
+    firstPanel: mapObj,
+    secondPanel: down_panel,
+    orientation: 'vertical'
+  })],
+  style: {height: '75%'}
+})
+var leftmid_panel = ui.Panel({
+  widgets: [ui.SplitPanel({
+    firstPanel: left_panel,
+    secondPanel: up_downmid_panel,
+    orientation: 'horizontal'
+  })],
+  style: {height: '30%', 
+         // width: '30%',
+          position: 'top-left',
+          padding: '0px',
+          margin: '0px',
+          border: '0px',
+          stretch: 'both',
+          backgroundColor:'rgba(255, 255, 255, 0.5)'}
+})
+
+var all_panel = ui.SplitPanel({
+  firstPanel: leftmid_panel,
+  secondPanel: right_panel,
+  orientation: 'horizontal',
+  wipe: false,
+})
+  
+/**insert panel on layer**/
+ui.root.widgets().reset([all_panel])
 
